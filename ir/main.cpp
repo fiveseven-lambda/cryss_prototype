@@ -251,6 +251,7 @@ int main(){
         }
         std::cout << std::endl;
     };
+
     std::make_unique<ir::Subst>(
         std::make_unique<ir::Global>(0),
         std::make_unique<ir::Subst>(
@@ -289,16 +290,109 @@ int main(){
     print_globals();
 
     /*
-     * fact(n: int): int {
+     * fact_loop(n: int): int {
+     *   int ret;
+     *   ret = 1;
+     * loop:
+     *   ret *= n;
+     *   n -= 1;
+     *   goto n == 0 ? end : loop;
+     * end:
+     *   return ret;
+     * }
+     */
+    auto fact_loop = std::make_shared<ir::Def>();
+    fact_loop->blocks.emplace_back(
+        []{
+            std::vector<std::unique_ptr<ir::RExpr>> stmts;
+            stmts.push_back(std::make_unique<ir::Subst>(
+                std::make_unique<ir::Local>(1),
+                std::make_unique<ir::Imm>(
+                    std::make_shared<ir::Int>(1)
+                )
+            ));
+            return stmts;
+        }(),
+        std::make_unique<ir::Jmp>(1)
+    );
+    fact_loop->blocks.emplace_back(
+        []{
+            std::vector<std::unique_ptr<ir::RExpr>> stmts;
+            stmts.push_back(std::make_unique<ir::Subst>(
+                std::make_unique<ir::Local>(1),
+                std::make_unique<ir::Call>(
+                    std::make_shared<ir::IMul>(),
+                    []{
+                        std::vector<std::unique_ptr<ir::RExpr>> args;
+                        args.push_back(std::make_unique<ir::Local>(0));
+                        args.push_back(std::make_unique<ir::Local>(1));
+                        return args;
+                    }()
+                )
+            ));
+            stmts.push_back(std::make_unique<ir::Subst>(
+                std::make_unique<ir::Local>(0),
+                std::make_unique<ir::Call>(
+                    std::make_shared<ir::IAdd>(),
+                    []{
+                        std::vector<std::unique_ptr<ir::RExpr>> args;
+                        args.push_back(std::make_unique<ir::Local>(0));
+                        args.push_back(std::make_unique<ir::Imm>(
+                            std::make_shared<ir::Int>(-1)
+                        ));
+                        return args;
+                    }()
+                )
+            ));
+            return stmts;
+        }(),
+        std::make_unique<ir::Br>(
+            std::make_unique<ir::Call>(
+                std::make_shared<ir::IEq>(),
+                []{
+                    std::vector<std::unique_ptr<ir::RExpr>> args;
+                    args.push_back(std::make_unique<ir::Local>(0));
+                    args.push_back(std::make_unique<ir::Imm>(
+                        std::make_shared<ir::Int>(0)
+                    ));
+                    return args;
+                }()
+            ),
+            2, 1
+        )
+    );
+    fact_loop->blocks.emplace_back(
+        std::vector<std::unique_ptr<ir::RExpr>>(),
+        std::make_unique<ir::Ret>(
+            std::make_unique<ir::Local>(1)
+        )
+    );
+    fact_loop->num_local = 2;
+    std::make_unique<ir::Subst>(
+        std::make_unique<ir::Global>(0),
+        std::make_unique<ir::Call>(
+            fact_loop,
+            []{
+                std::vector<std::unique_ptr<ir::RExpr>> args;
+                args.push_back(std::make_unique<ir::Imm>(
+                    std::make_shared<ir::Int>(5)
+                ));
+                return args;
+            }()
+        )
+    )->exec(globals);
+    print_globals();
+    /*
+     * fact_rec(n: int): int {
      *   if(n == 0){
      *     return 1;
      *   }else{
-     *     return n * fact(n - 1);
+     *     return n * fact_rec(n - 1);
      *   }
      * }
      */
-    auto fact = std::make_shared<ir::Def>();
-    fact->blocks.emplace_back(
+    auto fact_rec = std::make_shared<ir::Def>();
+    fact_rec->blocks.emplace_back(
         std::vector<std::unique_ptr<ir::RExpr>>(),
         std::make_unique<ir::Br>(
             std::make_unique<ir::Call>(
@@ -315,7 +409,7 @@ int main(){
             1, 2
         )
     );
-    fact->blocks.emplace_back(
+    fact_rec->blocks.emplace_back(
         std::vector<std::unique_ptr<ir::RExpr>>(),
         std::make_unique<ir::Ret>(
             std::make_unique<ir::Imm>(
@@ -323,7 +417,7 @@ int main(){
             )
         )
     );
-    fact->blocks.emplace_back(
+    fact_rec->blocks.emplace_back(
         std::vector<std::unique_ptr<ir::RExpr>>(),
         std::make_unique<ir::Ret>(
             std::make_unique<ir::Call>(
@@ -332,7 +426,7 @@ int main(){
                     std::vector<std::unique_ptr<ir::RExpr>> args;
                     args.push_back(std::make_unique<ir::Local>(0));
                     args.push_back(std::make_unique<ir::Call>(
-                        fact,
+                        fact_rec,
                         []{
                             std::vector<std::unique_ptr<ir::RExpr>> args;
                             args.push_back(std::make_unique<ir::Call>(
@@ -354,11 +448,11 @@ int main(){
             )
         )
     );
-    fact->num_local = 1;
+    fact_rec->num_local = 1;
     std::make_unique<ir::Subst>(
-        std::make_unique<ir::Global>(0),
+        std::make_unique<ir::Global>(1),
         std::make_unique<ir::Call>(
-            fact,
+            fact_rec,
             []{
                 std::vector<std::unique_ptr<ir::RExpr>> args;
                 args.push_back(std::make_unique<ir::Imm>(
