@@ -184,7 +184,76 @@ int main(){
         5
     ));
 
+    auto fact_rec = std::make_shared<ir::FuncDef>();
+    fact_rec->num_locals = 1;
+    fact_rec->stmts.push_back(ir::BrStmt(
+        std::make_unique<ir::Call>(
+            std::make_unique<ir::Imm>(ieq),
+            [&]{
+                std::vector<std::unique_ptr<ir::Expr>> tmp;
+                tmp.push_back(std::make_unique<ir::Call>(
+                    std::make_unique<ir::Imm>(deref),
+                    [&]{
+                        std::vector<std::unique_ptr<ir::Expr>> tmp2;
+                        tmp2.push_back(std::make_unique<ir::Local>(0));
+                        return tmp2;
+                    }()
+                ));
+                tmp.push_back(std::make_unique<ir::Imm>(0));
+                return tmp;
+            }()
+        ),
+        1,
+        2
+    ));
+    fact_rec->stmts.push_back(ir::ExprStmt(
+        std::make_unique<ir::Imm>(1),
+        3
+    ));
+    fact_rec->stmts.push_back(ir::ExprStmt(
+        std::make_unique<ir::Call>(
+            std::make_unique<ir::Imm>(imul),
+            [&]{
+                std::vector<std::unique_ptr<ir::Expr>> tmp;
+                tmp.push_back(std::make_unique<ir::Call>(
+                    std::make_unique<ir::Imm>(deref),
+                    [&]{
+                        std::vector<std::unique_ptr<ir::Expr>> tmp2;
+                        tmp2.push_back(std::make_unique<ir::Local>(0));
+                        return tmp2;
+                    }()
+                ));
+                tmp.push_back(std::make_unique<ir::Call>(
+                    std::make_unique<ir::Imm>(fact_rec),
+                    [&]{
+                        std::vector<std::unique_ptr<ir::Expr>> tmp2;
+                        tmp2.push_back(std::make_unique<ir::Call>(
+                            std::make_unique<ir::Imm>(iadd),
+                            [&]{
+                                std::vector<std::unique_ptr<ir::Expr>> tmp3;
+                                tmp3.push_back(std::make_unique<ir::Call>(
+                                    std::make_unique<ir::Imm>(deref),
+                                    [&]{
+                                        std::vector<std::unique_ptr<ir::Expr>> tmp4;
+                                        tmp4.push_back(std::make_unique<ir::Local>(0));
+                                        return tmp4;
+                                    }()
+                                ));
+                                tmp3.push_back(std::make_unique<ir::Imm>(-1));
+                                return tmp3;
+                            }()
+                        ));
+                        return tmp2;
+                    }()
+                ));
+                return tmp;
+            }()
+        ),
+        3
+    ));
+
     ir::Env env;
     std::cout << std::get<ir::Int>(add_one->invoke(env, {ir::Int(1)})) << std::endl;
     std::cout << std::get<ir::Int>(fact_loop->invoke(env, {ir::Int(10)})) << std::endl;
+    std::cout << std::get<ir::Int>(fact_rec->invoke(env, {ir::Int(10)})) << std::endl;
 }
