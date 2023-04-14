@@ -133,4 +133,34 @@ fn main() {
         .map(|sound| sound.into_sound().unwrap().sample(1., 5))
         .collect::<Vec<_>>()
     );
+
+    println!();
+    println!(
+        "Const[#0]: {:?}",
+        ty::Func {
+            args: vec![ty::Arg::Expr(ty::Expr::Var(0))],
+            ret: ty::Expr::App(ty::Kind::Sound, vec![ty::Arg::Expr(ty::Expr::Var(0))]),
+        }
+    );
+    let app_ty = ty::Func {
+        args: vec![
+            ty::Arg::Expr(ty::Expr::App(
+                ty::Kind::Func,
+                vec![
+                    ty::Arg::Expr(ty::Expr::Var(0)),
+                    ty::Arg::Expand(ty::Expr::Range(1, 0)),
+                ],
+            )),
+            ty::Arg::Expand(ty::Expr::App(
+                ty::Kind::Sound,
+                vec![ty::Arg::Expr(ty::Expr::Range(1, 0))],
+            )),
+        ],
+        ret: ty::Expr::App(ty::Kind::Sound, vec![ty::Arg::Expr(ty::Expr::Var(0))]),
+    };
+    println!("App[#0, #1:#-0]: {app_ty:?}");
+    println!(
+        "App[Int, Float, Bool]: {:?}",
+        app_ty.eval(&[ty::Ty::int(), ty::Ty::float(), ty::Ty::bool()])
+    );
 }
