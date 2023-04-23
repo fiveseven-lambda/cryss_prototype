@@ -1,107 +1,77 @@
-use std::collections::{HashMap, VecDeque};
-use std::fmt::{self, Debug, Formatter};
+use std::collections::VecDeque;
+
+mod ir;
+mod ty;
 
 fn main() {
     let converters = vec![
-        Converter {
-            name: "i2f",
-            num_vars: 0,
-            from: Expr::App("int", vec![]),
-            to: Expr::App("float", vec![]),
-        },
-        Converter {
-            name: "deref",
-            num_vars: 1,
-            from: Expr::App("ref", vec![Expr::Var(0)]),
-            to: Expr::Var(0),
-        },
+        (
+            ir::Func::Deref,
+            ty::Converter {
+                num_vars: 1,
+                from: expr!(Ref, expr!(0)),
+                to: expr!(0),
+            },
+        ),
+        (
+            ir::Func::BoolToInt,
+            ty::Converter {
+                num_vars: 0,
+                from: expr!(Bool),
+                to: expr!(Int),
+            },
+        ),
+        (
+            ir::Func::IntToFloat,
+            ty::Converter {
+                num_vars: 0,
+                from: expr!(Int),
+                to: expr!(Float),
+            },
+        ),
     ];
-    let mut queue = VecDeque::new();
-    queue.push_back(Ty {
-        kind: "ref",
-        args: vec![Ty {
-            kind: "int",
-            args: vec![],
-        }],
-    });
-    let mut prev = HashMap::new();
-    while let Some(from) = queue.pop_front() {
-        for converter in &converters {
-            if let Some(to) = converter.app(&from) {
-                if !prev.contains_key(&to) {
-                    prev.insert(to.clone(), (converter.name, from.clone()));
-                    queue.push_back(to);
-                }
+    let mut vars: im::Vector<_> = (0..0).map(|_| None).collect();
+    let result: Option<Vec<_>> = vec![
+        (ir::Expr::Atom("hoge"), ty!(Sound, ty!(Bool)), expr!(Int)),
+        (ir::Expr::Atom("fuga"), ty!(Int), expr!(Int)),
+    ]
+    .iter()
+    .map(|(expr, given, expected)| convert(expr, given, expected, &mut vars, &converters))
+    .collect();
+    dbg!(&result);
+}
+
+fn convert(
+    expr: &ir::Expr,
+    ty: &ty::Ty,
+    dest: &ty::Expr,
+    vars: &mut im::Vector<Option<ty::Ty>>,
+    converters: &[(ir::Func, ty::Converter)],
+) -> Option<(usize, usize, ir::Expr)> {
+    let (ty_depth, ty_inner) = ty.pause();
+    let (dest_depth, dest_inner) = dest.pause();
+    let mut queue = VecDeque::from([(ty_inner.clone(), expr.clone())]);
+    while let Some((ty, expr)) = queue.pop_front() {
+        let mut vars_cloned = vars.clone();
+        if dest_inner.identify(&ty, &mut vars_cloned) {
+            *vars = vars_cloned;
+            return Some((ty_depth, dest_depth, expr));
+        }
+        for &(converter, ref converter_ty) in converters {
+            let mut converter_vars = (0..converter_ty.num_vars).map(|_| None).collect();
+            if converter_ty.from.identify(&ty, &mut converter_vars) {
+                let next_ty = converter_ty.to.subst(&converter_vars);
+                let next_expr = app(ir::Expr::Func(converter), vec![(ty_depth, 0, expr.clone())]);
+                queue.push_back((next_ty, next_expr));
             }
         }
     }
-    println!("{:?}", prev);
+    None
 }
 
-type Kind = &'static str;
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct Ty {
-    kind: Kind,
-    args: Vec<Ty>,
-}
-impl Debug for Ty {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.kind)?;
-        if !self.args.is_empty() {
-            write!(f, "{:?}", self.args)?;
-        }
-        Ok(())
-    }
-}
-
-enum Expr {
-    Var(usize),
-    App(Kind, Vec<Expr>),
-}
-impl Expr {
-    fn subst(&self, vars: &[Option<Ty>]) -> Ty {
-        match *self {
-            Expr::Var(id) => vars[id].clone().unwrap(),
-            Expr::App(kind, ref args) => Ty {
-                kind,
-                args: args.iter().map(|expr| expr.subst(vars)).collect(),
-            },
-        }
-    }
-    fn identify(&self, goal: &Ty, vars: &mut Vec<Option<Ty>>) -> bool {
-        match *self {
-            Expr::Var(id) => match &vars[id] {
-                Some(ty) => ty == goal,
-                None => {
-                    vars[id] = Some(goal.clone());
-                    true
-                }
-            },
-            Expr::App(kind, ref args) => {
-                kind == goal.kind
-                    && args.len() == goal.args.len()
-                    && args
-                        .iter()
-                        .zip(&goal.args)
-                        .all(|(expr, ty)| expr.identify(ty, vars))
-            }
-        }
-    }
-}
-
-struct Converter {
-    name: &'static str,
-    num_vars: usize,
-    from: Expr,
-    to: Expr,
-}
-
-impl Converter {
-    fn app(&self, from: &Ty) -> Option<Ty> {
-        let mut vars = vec![None; self.num_vars];
-        self.from
-            .identify(from, &mut vars)
-            .then(|| self.to.subst(&vars))
-    }
+fn app(func: ir::Expr, args: Vec<(usize, usize, ir::Expr)>) -> ir::Expr {
+    ir::Expr::Call(
+        func.into(),
+        args.into_iter().map(|(_, _, expr)| expr).collect(),
+    )
 }
