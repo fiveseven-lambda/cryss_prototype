@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::iter;
 
 mod ir;
 mod ty;
@@ -31,13 +32,14 @@ fn main() {
         ),
     ];
     let mut vars: im::Vector<_> = (0..0).map(|_| None).collect();
-    let result: Option<Vec<_>> = vec![
-        (ir::Expr::Atom("hoge"), ty!(Sound, ty!(Bool)), expr!(Int)),
-        (ir::Expr::Atom("fuga"), ty!(Int), expr!(Int)),
+    let result = vec![
+        (ir::Expr::Atom("x"), ty!(Sound, ty!(Sound, ty!(Int))), expr!(Float)),
+        (ir::Expr::Atom("y"), ty!(Sound, ty!(Int)), expr!(Float)),
     ]
     .iter()
     .map(|(expr, given, expected)| convert(expr, given, expected, &mut vars, &converters))
-    .collect();
+    .collect::<Option<Vec<_>>>()
+    .map(|args| app(ir::Expr::Atom("f"), args));
     dbg!(&result);
 }
 
@@ -70,8 +72,26 @@ fn convert(
 }
 
 fn app(func: ir::Expr, args: Vec<(usize, usize, ir::Expr)>) -> ir::Expr {
-    ir::Expr::Call(
-        func.into(),
-        args.into_iter().map(|(_, _, expr)| expr).collect(),
-    )
+    if args.iter().any(|(given, expected, _)| given > expected) {
+        app(
+            ir::Expr::Func(ir::Func::App),
+            iter::once((0, 0, func))
+                .chain(
+                    args.into_iter()
+                        .map(|(given, expected, expr)| (given, expected + 1, expr)),
+                )
+                .collect(),
+        )
+    } else {
+        ir::Expr::Call(
+            func.into(),
+            args.into_iter()
+                .map(|(given, expected, expr)| {
+                    (given..expected).fold(expr, |expr, i| {
+                        app(ir::Expr::Func(ir::Func::Const), vec![(i, 0, expr)])
+                    })
+                })
+                .collect(),
+        )
+    }
 }
