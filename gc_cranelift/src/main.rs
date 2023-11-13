@@ -1,158 +1,123 @@
+use std::rc::Rc;
+
 use cranelift::prelude::*;
+use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::Module;
 
-use std::{
-    collections::HashMap,
-    fmt::{self, Debug, Formatter},
-};
-
+#[derive(Debug)]
 enum Tree {
     Leaf(i32),
-    Node(*const Tree, *const Tree),
+    Node(Rc<Tree>, Rc<Tree>),
 }
-unsafe extern "C" fn print_unsafe(ptr: *const Tree) {
-    println!("{}", to_string_unsafe(ptr))
+extern "C" fn new_leaf(value: i32) -> *const Tree {
+    let ptr = Rc::into_raw(Tree::Leaf(value).into());
+    ptr
 }
-unsafe fn to_string_unsafe(ptr: *const Tree) -> String {
-    match *ptr {
-        Tree::Leaf(value) => value.to_string(),
-        Tree::Node(left, right) => {
-            format!("({},{})", to_string_unsafe(left), to_string_unsafe(right))
+unsafe extern "C" fn new_node(left: *const Tree, right: *const Tree) -> *const Tree {
+    Rc::increment_strong_count(left);
+    Rc::increment_strong_count(right);
+    let ptr = Rc::into_raw(Tree::Node(Rc::from_raw(left), Rc::from_raw(right)).into());
+    ptr
+}
+unsafe extern "C" fn delete_tree(ptr: *const Tree) {
+    Rc::from_raw(ptr);
+}
+unsafe extern "C" fn print_tree(ptr: *const Tree) {
+    let tree = Rc::from_raw(ptr);
+    println!("{}", tree2string(&tree));
+    std::mem::forget(tree);
+}
+fn tree2string(tree: &Rc<Tree>) -> String {
+    let count = Rc::strong_count(&tree);
+    match **tree {
+        Tree::Leaf(value) => {
+            format!("({})\"{}\"", count, value)
+        }
+        Tree::Node(ref left, ref right) => {
+            format!("({})[{},{}]", count, tree2string(left), tree2string(right))
         }
     }
-}
-extern "C" fn leaf(value: i32) -> *const Tree {
-    Box::into_raw(Tree::Leaf(value).into())
-}
-extern "C" fn node(left: *const Tree, right: *const Tree) -> *const Tree {
-    Box::into_raw(Tree::Node(left, right).into())
-}
-
-enum Expr {
-    Var(String),
-    Leaf(i32),
-    Node(Box<Expr>, Box<Expr>),
-}
-impl Expr {
-    fn compile(
-        self,
-        module: &impl Module,
-        builder: &mut FunctionBuilder,
-        vars: &HashMap<&str, Value>,
-    ) -> Value {
-        match self {
-            Expr::Leaf(value) => {
-                let value = builder.ins().iconst(types::I32, value as i64);
-                let sig = builder.import_signature({
-                    let mut sig = module.make_signature();
-                    sig.params.push(AbiParam::new(types::I32));
-                    sig.returns.push(AbiParam::new(types::I64));
-                    sig
-                });
-                let leaf_ptr = builder.ins().iconst(types::I64, leaf as i64);
-                let inst = builder.ins().call_indirect(sig, leaf_ptr, &[value]);
-                builder.inst_results(inst)[0]
-            }
-            Expr::Node(left, right) => {
-                let left = left.compile(module, builder, vars);
-                let right = right.compile(module, builder, vars);
-                let sig = builder.import_signature({
-                    let mut sig = module.make_signature();
-                    sig.params.push(AbiParam::new(types::I64));
-                    sig.params.push(AbiParam::new(types::I64));
-                    sig.returns.push(AbiParam::new(types::I64));
-                    sig
-                });
-                let node_ptr = builder.ins().iconst(types::I64, node as i64);
-                let inst = builder.ins().call_indirect(sig, node_ptr, &[left, right]);
-                builder.inst_results(inst)[0]
-            }
-            Expr::Var(name) => vars[&name[..]],
-        }
-    }
-}
-
-impl Debug for Expr {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            Expr::Var(name) => write!(f, "{name}"),
-            Expr::Leaf(value) => write!(f, "{value}"),
-            Expr::Node(left, right) => {
-                write!(f, "({left:?}, {right:?})")
-            }
-        }
-    }
-}
-
-macro_rules! expr {
-    ($name:literal) => {
-        Expr::Var(String::from($name))
-    };
-    (($value:literal)) => {
-        Expr::Leaf($value)
-    };
-    (($left:tt, $right:tt)) => {
-        Expr::Node(Box::new(expr!($left)), Box::new(expr!($right)))
-    };
 }
 
 fn main() {
-    let program = vec![
-        (Some("a"), expr!((10))),
-        (Some("b"), expr!(("a", "a"))),
-        (Some("c"), expr!(("a", "b"))),
-        (None, expr!("c")),
-    ];
+    let jit_builder = JITBuilder::new(cranelift_module::default_libcall_names()).unwrap();
+    let mut module = JITModule::new(jit_builder);
+    let ptr_ty = module.target_config().pointer_type();
 
-    for (var, expr) in &program {
-        println!("{var:?} <- {expr:?}");
-    }
-
-    let jit_builder =
-        cranelift_jit::JITBuilder::new(cranelift_module::default_libcall_names()).unwrap();
-    let mut module = cranelift_jit::JITModule::new(jit_builder);
     let mut ctx = module.make_context();
     ctx.func.signature = module.make_signature();
     let mut fn_builder_ctx = FunctionBuilderContext::new();
-
     let mut builder = FunctionBuilder::new(&mut ctx.func, &mut fn_builder_ctx);
+
     let block = builder.create_block();
+    builder.append_block_params_for_function_params(block);
     builder.switch_to_block(block);
 
-    let mut vars = HashMap::new();
-    for (name, expr) in program {
-        let value = expr.compile(&module, &mut builder, &vars);
-        match name {
-            Some(name) => {
-                vars.insert(name, value);
-            }
-            None => {
-                let sig = builder.import_signature({
-                    let mut sig = module.make_signature();
-                    sig.params.push(AbiParam::new(types::I64));
-                    sig
-                });
-                let ptr = builder.ins().iconst(types::I64, print_unsafe as i64);
-                builder.ins().call_indirect(sig, ptr, &[value]);
-            }
-        };
-    }
+    let new_leaf_ptr = builder.ins().iconst(ptr_ty, new_leaf as i64);
+    let new_leaf_sig = builder.import_signature({
+        let mut sig = module.make_signature();
+        sig.params.push(AbiParam::new(types::I32));
+        sig.returns.push(AbiParam::new(ptr_ty));
+        sig
+    });
+    let new_node_ptr = builder.ins().iconst(ptr_ty, new_node as i64);
+    let new_node_sig = builder.import_signature({
+        let mut sig = module.make_signature();
+        sig.params.push(AbiParam::new(ptr_ty));
+        sig.params.push(AbiParam::new(ptr_ty));
+        sig.returns.push(AbiParam::new(ptr_ty));
+        sig
+    });
+    let delete_tree_ptr = builder.ins().iconst(ptr_ty, delete_tree as i64);
+    let delete_tree_sig = builder.import_signature({
+        let mut sig = module.make_signature();
+        sig.params.push(AbiParam::new(ptr_ty));
+        sig
+    });
+    let print_tree_ptr = builder.ins().iconst(ptr_ty, print_tree as i64);
+    let print_tree_sig = delete_tree_sig;
+
+    let var0 = Variable::new(0);
+    builder.declare_var(var0, ptr_ty);
+    let one = builder.ins().iconst(types::I32, 1);
+    let leaf_one_inst = builder
+        .ins()
+        .call_indirect(new_leaf_sig, new_leaf_ptr, &[one]);
+    let leaf_one = builder.inst_results(leaf_one_inst)[0];
+    builder.def_var(var0, leaf_one);
+
+    let var1 = Variable::new(1);
+    builder.declare_var(var1, ptr_ty);
+    let node_one_one_inst =
+        builder
+            .ins()
+            .call_indirect(new_node_sig, new_node_ptr, &[leaf_one, leaf_one]);
+    let node_one_one = builder.inst_results(node_one_one_inst)[0];
+    builder
+        .ins()
+        .call_indirect(print_tree_sig, print_tree_ptr, &[node_one_one]);
+    builder
+        .ins()
+        .call_indirect(delete_tree_sig, delete_tree_ptr, &[leaf_one]);
+    builder
+        .ins()
+        .call_indirect(print_tree_sig, print_tree_ptr, &[node_one_one]);
+    builder
+        .ins()
+        .call_indirect(delete_tree_sig, delete_tree_ptr, &[node_one_one]);
 
     builder.ins().return_(&[]);
     builder.seal_block(block);
+
     builder.finalize();
     println!("{}", ctx.func.display());
 
     let func = module
-        .declare_function(
-            "func",
-            cranelift_module::Linkage::Local,
-            &ctx.func.signature,
-        )
+        .declare_function("", cranelift_module::Linkage::Local, &ctx.func.signature)
         .unwrap();
     module.define_function(func, &mut ctx).unwrap();
     module.finalize_definitions().unwrap();
     let code = module.get_finalized_function(func);
-    let ptr = unsafe { std::mem::transmute::<_, unsafe fn() -> *const Tree>(code) };
+    let ptr = unsafe { std::mem::transmute::<_, unsafe fn() -> ()>(code) };
     unsafe { ptr() };
 }
