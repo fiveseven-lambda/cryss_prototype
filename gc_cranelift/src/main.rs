@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{mem::ManuallyDrop, rc::Rc};
 
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
@@ -7,25 +7,25 @@ use cranelift_module::Module;
 #[derive(Debug)]
 enum Tree {
     Leaf(i32),
-    Node(Rc<Tree>, Rc<Tree>),
+    Node(Vec<Rc<Tree>>),
 }
 extern "C" fn new_leaf(value: i32) -> *const Tree {
-    let ptr = Rc::into_raw(Tree::Leaf(value).into());
-    ptr
+    Rc::into_raw(Tree::Leaf(value).into())
 }
-unsafe extern "C" fn new_node(left: *const Tree, right: *const Tree) -> *const Tree {
-    Rc::increment_strong_count(left);
-    Rc::increment_strong_count(right);
-    let ptr = Rc::into_raw(Tree::Node(Rc::from_raw(left), Rc::from_raw(right)).into());
-    ptr
+unsafe extern "C" fn add_child(children: &mut Vec<Rc<Tree>>, tree: *const Tree) {
+    Rc::increment_strong_count(tree);
+    children.push(Rc::from_raw(tree));
+}
+extern "C" fn new_node(children: &mut Vec<Rc<Tree>>) -> *const Tree {
+    let children = std::mem::take(children);
+    Rc::into_raw(Tree::Node(children).into())
 }
 unsafe extern "C" fn delete_tree(ptr: *const Tree) {
     Rc::from_raw(ptr);
 }
 unsafe extern "C" fn print_tree(ptr: *const Tree) {
-    let tree = Rc::from_raw(ptr);
+    let tree = ManuallyDrop::new(Rc::from_raw(ptr));
     println!("{}", tree2string(&tree));
-    std::mem::forget(tree);
 }
 fn tree2string(tree: &Rc<Tree>) -> String {
     let count = Rc::strong_count(&tree);
@@ -33,13 +33,23 @@ fn tree2string(tree: &Rc<Tree>) -> String {
         Tree::Leaf(value) => {
             format!("({})\"{}\"", count, value)
         }
-        Tree::Node(ref left, ref right) => {
-            format!("({})[{},{}]", count, tree2string(left), tree2string(right))
+        Tree::Node(ref children) => {
+            format!(
+                "({})[{}]",
+                count,
+                children
+                    .iter()
+                    .map(tree2string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
         }
     }
 }
 
 fn main() {
+    let mut trees = Vec::new();
+
     let jit_builder = JITBuilder::new(cranelift_module::default_libcall_names()).unwrap();
     let mut module = JITModule::new(jit_builder);
     let ptr_ty = module.target_config().pointer_type();
@@ -60,10 +70,16 @@ fn main() {
         sig.returns.push(AbiParam::new(ptr_ty));
         sig
     });
+    let add_child_ptr = builder.ins().iconst(ptr_ty, add_child as i64);
+    let add_child_sig = builder.import_signature({
+        let mut sig = module.make_signature();
+        sig.params.push(AbiParam::new(ptr_ty));
+        sig.params.push(AbiParam::new(ptr_ty));
+        sig
+    });
     let new_node_ptr = builder.ins().iconst(ptr_ty, new_node as i64);
     let new_node_sig = builder.import_signature({
         let mut sig = module.make_signature();
-        sig.params.push(AbiParam::new(ptr_ty));
         sig.params.push(AbiParam::new(ptr_ty));
         sig.returns.push(AbiParam::new(ptr_ty));
         sig
@@ -77,6 +93,10 @@ fn main() {
     let print_tree_ptr = builder.ins().iconst(ptr_ty, print_tree as i64);
     let print_tree_sig = delete_tree_sig;
 
+    let children = builder
+        .ins()
+        .iconst(ptr_ty, &mut trees as *mut Vec<Rc<Tree>> as i64);
+
     let var0 = Variable::new(0);
     builder.declare_var(var0, ptr_ty);
     let one = builder.ins().iconst(types::I32, 1);
@@ -88,10 +108,15 @@ fn main() {
 
     let var1 = Variable::new(1);
     builder.declare_var(var1, ptr_ty);
-    let node_one_one_inst =
-        builder
-            .ins()
-            .call_indirect(new_node_sig, new_node_ptr, &[leaf_one, leaf_one]);
+    builder
+        .ins()
+        .call_indirect(add_child_sig, add_child_ptr, &[children, leaf_one]);
+    builder
+        .ins()
+        .call_indirect(add_child_sig, add_child_ptr, &[children, leaf_one]);
+    let node_one_one_inst = builder
+        .ins()
+        .call_indirect(new_node_sig, new_node_ptr, &[children]);
     let node_one_one = builder.inst_results(node_one_one_inst)[0];
     builder
         .ins()
