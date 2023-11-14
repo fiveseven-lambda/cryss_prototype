@@ -151,7 +151,7 @@ fn main() {
     println!("{}", ctx.func.display());
 
     let func = module
-        .declare_function("", cranelift_module::Linkage::Local, &ctx.func.signature)
+        .declare_anonymous_function(&ctx.func.signature)
         .unwrap();
     module.define_function(func, &mut ctx).unwrap();
     module.finalize_definitions().unwrap();
