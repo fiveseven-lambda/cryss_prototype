@@ -28,7 +28,7 @@ unsafe extern "C" fn print_tree(ptr: *const Tree) {
     println!("{}", tree2string(&tree));
 }
 fn tree2string(tree: &Rc<Tree>) -> String {
-    let count = Rc::strong_count(&tree);
+    let count = Rc::strong_count(tree);
     match **tree {
         Tree::Leaf(value) => {
             format!("({})\"{}\"", count, value)
@@ -63,34 +63,47 @@ fn main() {
     builder.append_block_params_for_function_params(block);
     builder.switch_to_block(block);
 
-    let new_leaf_ptr = builder.ins().iconst(ptr_ty, new_leaf as i64);
+    let new_leaf_ptr = builder
+        .ins()
+        .iconst(ptr_ty, TryInto::<i64>::try_into(new_leaf as usize).unwrap());
     let new_leaf_sig = builder.import_signature({
         let mut sig = module.make_signature();
         sig.params.push(AbiParam::new(types::I32));
         sig.returns.push(AbiParam::new(ptr_ty));
         sig
     });
-    let add_child_ptr = builder.ins().iconst(ptr_ty, add_child as i64);
+    let add_child_ptr = builder.ins().iconst(
+        ptr_ty,
+        TryInto::<i64>::try_into(add_child as usize).unwrap(),
+    );
     let add_child_sig = builder.import_signature({
         let mut sig = module.make_signature();
         sig.params.push(AbiParam::new(ptr_ty));
         sig.params.push(AbiParam::new(ptr_ty));
         sig
     });
-    let new_node_ptr = builder.ins().iconst(ptr_ty, new_node as i64);
+    let new_node_ptr = builder
+        .ins()
+        .iconst(ptr_ty, TryInto::<i64>::try_into(new_node as usize).unwrap());
     let new_node_sig = builder.import_signature({
         let mut sig = module.make_signature();
         sig.params.push(AbiParam::new(ptr_ty));
         sig.returns.push(AbiParam::new(ptr_ty));
         sig
     });
-    let delete_tree_ptr = builder.ins().iconst(ptr_ty, delete_tree as i64);
+    let delete_tree_ptr = builder.ins().iconst(
+        ptr_ty,
+        TryInto::<i64>::try_into(delete_tree as usize).unwrap(),
+    );
     let delete_tree_sig = builder.import_signature({
         let mut sig = module.make_signature();
         sig.params.push(AbiParam::new(ptr_ty));
         sig
     });
-    let print_tree_ptr = builder.ins().iconst(ptr_ty, print_tree as i64);
+    let print_tree_ptr = builder.ins().iconst(
+        ptr_ty,
+        TryInto::<i64>::try_into(print_tree as usize).unwrap(),
+    );
     let print_tree_sig = delete_tree_sig;
 
     let children = builder
@@ -143,6 +156,5 @@ fn main() {
     module.define_function(func, &mut ctx).unwrap();
     module.finalize_definitions().unwrap();
     let code = module.get_finalized_function(func);
-    let ptr = unsafe { std::mem::transmute::<_, unsafe fn() -> ()>(code) };
-    unsafe { ptr() };
+    unsafe { std::mem::transmute::<_, unsafe fn() -> ()>(code)() }
 }
