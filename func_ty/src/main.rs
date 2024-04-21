@@ -1,25 +1,12 @@
-use crate::ty::Unify;
-
 mod ty;
 
 fn main() {
-    let x = ty::new_ty(
-        vec![vec![ty::new_ty(vec![], ty::new_undetermined())]],
-        ty::new_ret(String::from("abc"), vec![]),
+    let x = ty::new_returns(ty::new_undetermined());
+    let y = ty::new_determined(
+        String::from("hoge"),
+        vec![ty::new_returns(ty::new_undetermined())],
     );
-    let y = ty::new_ty(
-        vec![vec![ty::new_ty(vec![], ty::new_undetermined())]],
-        ty::new_ret(String::from("abc"), vec![]),
-    );
-    let z = ty::new_ty(
-        vec![vec![ty::new_ty(
-            vec![],
-            ty::new_ret(String::from("def"), vec![]),
-        )]],
-        ty::new_ret(String::from("abc"), vec![]),
-    );
-    println!("{x}\n{y}");
-    x.unify(&y);
-    y.unify(&z);
-    println!("{x}\n{y}");
+    println!("{x}, {y}");
+    x.unify(&ty::new_returns(y.clone()));
+    println!("{x}, {y}");
 }
