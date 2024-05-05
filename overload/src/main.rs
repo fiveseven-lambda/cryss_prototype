@@ -1,74 +1,102 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
-mod expr;
+use crate::ty::unify::Unify;
+
+mod input;
 mod ty;
 
 fn main() {
-    let field = {
-        let (funcs, mut exprs) = {
-            let mut funcs = HashMap::new();
-            let mut exprs = Vec::new();
-            let mut state = false;
-            use std::io::{BufRead, BufReader};
-            for line in
-                BufReader::new(std::fs::File::open(&std::env::args().nth(1).unwrap()).unwrap())
-                    .lines()
-            {
-                let line = line.unwrap();
-                if line.is_empty() {
-                    state = !state;
-                } else if !state {
-                    let (_, expr::Func { name, candidates }) = expr::parse_func(&line).unwrap();
-                    funcs.insert(name, candidates);
-                } else {
-                    let (_, expr) = expr::parse_expr(&line).unwrap();
-                    exprs.push(expr);
+    let (defs, exprs) = {
+        let mut defs = HashMap::new();
+        let mut exprs = Vec::new();
+        use std::io::{BufRead, BufReader};
+        for line in
+            BufReader::new(std::fs::File::open(&std::env::args().nth(1).unwrap()).unwrap()).lines()
+        {
+            let line = line.unwrap();
+            let (_, input) = input::parse(&line).unwrap();
+            match input {
+                input::Input::Def(name, ty) => {
+                    defs.insert(name, ty);
                 }
+                input::Input::Expr(expr) => exprs.push(expr),
             }
-            (funcs, exprs)
-        };
-        let mut vars = HashMap::new();
-        let mut num_vars = 0;
-        for expr in &mut exprs {
-            expr.get_vars(&funcs, &mut vars, &mut num_vars);
         }
-        let mut towers = Vec::new();
-        for expr in exprs {
-            expr.translate(&funcs, &vars, &mut num_vars, &mut towers, None);
-        }
-        ty::Field(towers)
+        (defs, exprs)
     };
+    /*
+    for (i, (name, ty)) in defs.iter().enumerate() {
+        println!("Def #{i}");
+        println!("{name}: {ty}");
+    }
+    for (i, expr) in exprs.iter().enumerate() {
+        println!("Expr #{i}");
+        println!("{expr}");
+    }
+    */
+    // 変数名とその型
     let mut vars = HashMap::new();
-    field._debug_print(&vars);
+    // 関数や変数の使用
+    let mut uses = Vec::new();
+
+    for expr in exprs {
+        expr.get_ty(&defs, &mut vars, &mut uses);
+    }
+    println!("-- Vars --");
+    for (name, ty) in &vars {
+        println!("{name}: {ty}");
+    }
+    for (i, func) in uses.iter().enumerate() {
+        println!("-- Use #{i} --");
+        func._debug_print();
+    }
     println!();
     let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout();
     loop {
         use std::io::Write;
-        print!("Tower index: ");
-        std::io::stdout().flush().unwrap();
-        let tower_idx: usize = {
+        write!(stdout, "Use #").unwrap();
+        stdout.flush().unwrap();
+        let target = {
             let mut input = String::new();
             stdin.read_line(&mut input).unwrap();
             let input = input.trim();
             if input.is_empty() {
                 break;
             }
-            input.parse().unwrap()
+            let idx: usize = input.parse().unwrap();
+            &uses[idx]
         };
-        let candidate_idx = if field.0[tower_idx].candidates.len() == 1 {
-            0
-        } else {
-            print!("Candidate index: ");
-            std::io::stdout().flush().unwrap();
-            let mut input = String::new();
-            stdin.read_line(&mut input).unwrap();
-            let input = input.trim();
-            if input.is_empty() {
-                break;
+        let mut ty = target.ty.clone();
+        for call in &target.calls {
+            let args_ty: Vec<_> = call.args.iter().map(|_| ty::new_var()).collect();
+            let mut ret_ty = ty::new_var();
+            ty::new_func(args_ty.clone(), ret_ty.clone()).unify(&ty);
+            let mut extra_args = VecDeque::new();
+            for (call_arg, func_arg) in call.args.iter().zip(&args_ty) {
+                match call_arg.ty.returns(func_arg) {
+                    ty::unify::Requirements::Calls(args) => {
+                        for (extra_arg, arg) in extra_args.iter().zip(&args) {
+                            arg.unify(extra_arg);
+                        }
+                        if extra_args.len() < args.len() {
+                            extra_args = args
+                        }
+                    }
+                    ty::unify::Requirements::Unknown => {}
+                    ty::unify::Requirements::Impossible => {}
+                }
             }
-            input.parse().unwrap()
-        };
-        field.determine(&mut vars, tower_idx, candidate_idx);
+            for args in extra_args {
+                ret_ty = ty::new_func(args, ret_ty)
+            }
+            ty = ret_ty
+        }
+        target.ret_ty.unify(&ty);
+        for (i, func) in uses.iter().enumerate() {
+            println!("-- Use #{i} --");
+            func._debug_print();
+        }
         println!();
     }
 }
