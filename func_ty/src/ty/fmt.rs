@@ -10,8 +10,30 @@ impl Display for Ty {
         Rc::as_ptr(&self.inner).hash(&mut hasher);
         write!(f, "{}", hasher.finish() % 1000)?;
         match &*self.inner.borrow() {
-            Inner::Determined(kind, args) => {
-                write!(f, ":{kind}")?;
+            TyInner::NonFunc(ret) => write!(f, "={ret}"),
+            TyInner::Func { args_ty, ret_ty } => write!(
+                f,
+                "=({}){}",
+                args_ty
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                ret_ty
+            ),
+            TyInner::Returns(ret) => write!(f, "=..{ret}"),
+            TyInner::SameAs(ty) => write!(f, "={ty}"),
+        }
+    }
+}
+impl Display for NonFunc {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut hasher = DefaultHasher::new();
+        Rc::as_ptr(&self.inner).hash(&mut hasher);
+        write!(f, "{}", hasher.finish() % 1000)?;
+        match &*self.inner.borrow() {
+            NonFuncInner::Determined { kind, args } => {
+                write!(f, "={}", kind)?;
                 if !args.is_empty() {
                     write!(
                         f,
@@ -24,19 +46,8 @@ impl Display for Ty {
                 }
                 Ok(())
             }
-            Inner::Func(args, ret) => {
-                write!(
-                    f,
-                    ":({}){ret}",
-                    args.iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            }
-            Inner::Returns(ret) => write!(f, "->{ret}"),
-            Inner::Undetermined => write!(f, "?"),
-            Inner::SameAs(self_equiv) => write!(f, "={self_equiv}"),
+            NonFuncInner::Undetermined => write!(f, "?"),
+            NonFuncInner::SameAs(ret) => write!(f, "={ret}"),
         }
     }
 }
